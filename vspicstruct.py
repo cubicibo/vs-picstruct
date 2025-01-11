@@ -24,7 +24,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import Generator
+from typing import Generator, TextIO
 from fractions import Fraction
 from enum import IntEnum
 from pathlib import Path
@@ -50,18 +50,18 @@ class PicStruct(IntEnum):
 
     @classmethod
     def get_via(cls, field_count: int, last_field: PROGRESSIVE_FRAME) -> 'PicStruct':
-        if   field_count == 1 and last_field != cls.BOTTOM:
-            return cls(cls.BOTTOM)
-        elif field_count == 1 and last_field != cls.TOP:
+        if   field_count == 1 and last_field != cls.TOP:
             return cls(cls.TOP)
+        elif field_count == 1 and last_field != cls.BOTTOM:
+            return cls(cls.BOTTOM)
         elif field_count == 2 and last_field != cls.TOP:                
             return cls(cls.TOP_BOTTOM)
         elif field_count == 2 and last_field != cls.BOTTOM:                
             return cls(cls.BOTTOM_TOP)
-        elif field_count == 3 and last_field != cls.BOTTOM:
-            return cls(cls.BOTTOM_TOP_BOTTOM)
         elif field_count == 3 and last_field != cls.TOP:
             return cls(cls.TOP_BOTTOM_TOP)
+        elif field_count == 3 and last_field != cls.BOTTOM:
+            return cls(cls.BOTTOM_TOP_BOTTOM)
         elif field_count == 4:
             return cls(cls.FRAME_DOUBLING)
         elif field_count == 6:
@@ -100,12 +100,14 @@ class Pulldown:
         self._state = (self._state + 1) % len(self._pattern)
         return self._pattern[self._state]
 
+###
+# for those who don't trust the algorithm
 class Pulldown32(Pulldown):
     def __init__(self) -> None:
-        super().__init__([PicStruct.TOP_BOTTOM_TOP,
+        super().__init__([PicStruct.TOP_BOTTOM,
+                          PicStruct.TOP_BOTTOM_TOP,
                           PicStruct.BOTTOM_TOP,
-                          PicStruct.BOTTOM_TOP_BOTTOM,
-                          PicStruct.TOP_BOTTOM])
+                          PicStruct.BOTTOM_TOP_BOTTOM])
 
 class Pulldown64(Pulldown):
     def __init__(self) -> None:
@@ -122,13 +124,14 @@ class SoftTripling(Pulldown):
 
 class PulldownEU(Pulldown):
     def __init__(self) -> None:
-        super().__init__([PicStruct.TOP_BOTTOM_TOP] + [PicStruct.BOTTOM_TOP] * 11 +\
-                         [PicStruct.BOTTOM_TOP_BOTTOM] + [PicStruct.TOP_BOTTOM] * 11)
+        super().__init__([PicStruct.TOP_BOTTOM] +      [PicStruct.TOP_BOTTOM_TOP] +\
+                         [PicStruct.BOTTOM_TOP] * 11 + [PicStruct.BOTTOM_TOP_BOTTOM] +\
+                         [PicStruct.TOP_BOTTOM] * 10)
 
 class Pulldown22(Pulldown):
     def __init__(self) -> None:
         super().__init__([PicStruct.TOP_BOTTOM])
-
+##
 
 class TimingContext:
     def __init__(self, fpsnum: int, fpsden: int, field_based: int):
@@ -185,17 +188,21 @@ class FrameFieldEncoding(IntEnum):
     TFF = 2
 
 class PicStructFileV1:
-    def __init__(self, fps_num: int, fps_den: int, file: Path | str, field_based: int = 2):
+    def __init__(self,
+        fps_num: int,
+        fps_den: int,
+        file: Path | str,
+        field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF
+    ) -> None:
         self._fp = Path(file)
         assert self._fp.parent.exists()
         self._fps = Fraction(fps_num, fps_den)
         assert 0 <= field_based <= 2
         self.field_based = field_based
 
-    def _write_header(self, f) -> None:
+    def _write_header(self, f: TextIO) -> None:
         f.write("# picstruct format v1\n\n")
         f.write("# format: frame_id frame_field_order pic_struct\n")
-        #f.write(f"framebase {self._fps.numerator}/{self._fps.denominator}\n")
 
     def generate(self, clip: vs.VideoNode) -> Generator[tuple[int, int, PicStruct], None, None]:
         tc = TimingContext(self._fps.numerator, self._fps.denominator, field_based=self.field_based)
