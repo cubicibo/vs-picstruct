@@ -28,7 +28,6 @@ from typing import Generator, TextIO
 from fractions import Fraction
 from enum import IntEnum
 from pathlib import Path
-import os
 
 import vapoursynth as vs
 core = vs.core
@@ -66,7 +65,7 @@ class PicStruct(IntEnum):
             return cls(cls.FRAME_DOUBLING)
         elif field_count == 6:
             return cls(cls.FRAME_TRIPLING)
-        assert 0, "No matching PicStruct"
+        assert 0, f"No PicStruct to repeat {field_count} fields."
         
     @classmethod
     def get_via_p(cls, frame_count: int) -> 'PicStruct':
@@ -76,7 +75,7 @@ class PicStruct(IntEnum):
             return cls(cls.FRAME_DOUBLING)
         elif frame_count == 3:
             return cls(cls.FRAME_TRIPLING)
-        assert 0, "No matching PicStruct"
+        assert 0, f"No PicStruct to repeat {frame_count} frames."
 
     def get_last_field(self) -> 'PicStruct':
         if self.name.endswith("TOP"):
@@ -139,21 +138,25 @@ class TimingContext:
         self.fps = Fraction(fpsnum, fpsden)
         self.field_based = field_based
 
-    def determine_pulldown(self, clip_fpsnum: int, clip_fpsden: int, override_field_based: int = 2) -> Pulldown:
+    def determine_pulldown(self,
+        clip_fpsnum: int,
+        clip_fpsden: int,
+        override_field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF
+    ) -> Pulldown:
         assert clip_fpsnum > 0 and clip_fpsden > 0
         fps = Fraction(clip_fpsnum, clip_fpsden)
 
         ratio = self.fps/fps
         assert ratio >= 1
         assert ratio.denominator < round(self.fps), "No pattern within one second"
-        can_force_progressive = float(ratio).is_integer() and override_field_based == 0
+        can_force_progressive = float(ratio).is_integer() and override_field_based == FrameFieldEncoding.P
 
         if self.field_based > 0 and not can_force_progressive:
             if override_field_based == 0:
                 override_field_based = self.field_based
             sequence = self._determine_field_reps(ratio, override_field_based)
         else:
-            assert override_field_based == 0 or can_force_progressive
+            assert override_field_based == FrameFieldEncoding.P or can_force_progressive
             sequence = self._determine_for_progressive(ratio)
         return Pulldown(sequence)
 
@@ -210,7 +213,7 @@ class PicStructFileV1:
 
         for k in range(len(clip)):
             props = clip.get_frame(k).props
-            fb = props.get('_FieldBased', 0)
+            fb = props.get('_FieldBased', 0) #if unset, then it is probably progressive
             tbd = props.get('_DurationNum')
             tbn = props.get('_DurationDen')
             if cfps != Fraction(tbn, tbd) or fb != cfo:
@@ -219,7 +222,7 @@ class PicStructFileV1:
                 cfps = Fraction(tbn, tbd)
             yield (k, fb, pdc.step())
 
-    def write(self, clip: vs.VideoNode) -> None:
+    def index(self, clip: vs.VideoNode) -> None:
         tc = TimingContext(self._fps.numerator, self._fps.denominator, field_based=self.field_based)
         cfps, cfo = None, None
 
@@ -227,7 +230,7 @@ class PicStructFileV1:
             self._write_header(f)
             for k in range(len(clip)):
                 props = clip.get_frame(k).props
-                fb = props.get('_FieldBased', 0)
+                fb = props.get('_FieldBased', 0) #if unset, then it is probably progressive
                 tbd = props.get('_DurationNum')
                 tbn = props.get('_DurationDen')
                 if cfps != Fraction(tbn, tbd) or fb != cfo:
