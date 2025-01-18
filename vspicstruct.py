@@ -84,6 +84,11 @@ class PicStruct(IntEnum):
             return __class__(__class__.BOTTOM)
         return __class__(__class__.PROGRESSIVE_FRAME)
 
+class FrameFieldEncoding(IntEnum):
+    P = 0
+    BFF = 1
+    TFF = 2
+
 class VideoCodingFormat(IntEnum):
     H264 = 0
     H265 = 1
@@ -184,11 +189,6 @@ class TimingContext:
             error_sum += ratio - current
             psf.append(PicStruct.get_via_p(current))
         return psf
-
-class FrameFieldEncoding(IntEnum):
-    P = 0
-    BFF = 1
-    TFF = 2
 
 class PicStructFileV1:
     def __init__(self,
