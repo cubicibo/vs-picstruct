@@ -9,25 +9,32 @@ Use with this [x264 mod](https://github.com/cubicibo/x264), and more specificall
 ```python
 from vspicstruct import PicStructFileV1
 
-container_fpsnum = 30000
-container_fpsden = 1001
-default_field_order = 2 # TFF
 psfile_out = 'some/path/file.txt'
 
-psf = PicStructFileV1(container_fpsnum, container_fpsden, psfile_out, default_field_order)
+container_fpsnum = 30000
+container_fpsden = 1001
+
+#Tag container as interlaced (TFF), as one section is real 59.94i
+default_field_order = 2
+
+#Ensure that frames tagged as TBT or BTB are followed by an interlaced frame.
+# paranoid option for compabilitiy. Prefer setting it to false
+ensure_even_field_count = True
+
+psf = PicStructFileV1(container_fpsnum, container_fpsden, psfile_out, default_field_order, ensure_even_field_count)
 
 # E.g. final clip is made of three different parts:
 #23.976p
 clip1 = core.std.BlankClip(..., fpsnum=24000, fpsden=1001)
 clip1 = core.std.SetFieldBased(clip1, 0)
 
-#29.97p
-clip2 = core.std.BlankClip(..., fpsnum=30000, fpsden=1001)
-clip2 = core.std.SetFieldBased(clip2, 0)
-
 #59.94i TFF
+clip2 = core.std.BlankClip(..., fpsnum=30000, fpsden=1001)
+clip2 = core.std.SetFieldBased(clip2, 2)
+
+#29.97p
 clip3 = core.std.BlankClip(..., fpsnum=30000, fpsden=1001)
-clip3 = core.std.SetFieldBased(clip3, 2)
+clip3 = core.std.SetFieldBased(clip3, 0)
 
 clip = clip1 + clip2 + clip3
 
@@ -74,3 +81,8 @@ Here's an index for a clip with 23.976p, 59.94i and 29.97p sections.
 35 0 0
 ...
 ```
+
+## References
+- ITU-T Rec H.264 (Table D-1 notably)
+- ITU-T Rec H.265 (Table D-2)
+- x264 and x265 source code.

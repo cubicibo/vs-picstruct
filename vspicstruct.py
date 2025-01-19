@@ -29,13 +29,10 @@ from fractions import Fraction
 from enum import IntEnum
 from pathlib import Path
 
-import vapoursynth as vs
-core = vs.core
-
 class PicStruct(IntEnum):
     PROGRESSIVE_FRAME = 0
-    TOP               = 1  #PAFF
-    BOTTOM            = 2  #PAFF
+    TOP               = 1  #PAFF, unsupported by x264
+    BOTTOM            = 2  #PAFF, unsupported by x264
     TOP_BOTTOM        = 3
     BOTTOM_TOP        = 4
     TOP_BOTTOM_TOP    = 5
@@ -83,6 +80,9 @@ class PicStruct(IntEnum):
         elif self.name.endswith('BOTTOM'):
             return __class__(__class__.BOTTOM)
         return __class__(__class__.PROGRESSIVE_FRAME)
+
+    def is_progressive(self) -> bool:
+        return self in [0, 7, 8]
 
 class FrameFieldEncoding(IntEnum):
     P = 0
@@ -138,21 +138,27 @@ class Pulldown22(Pulldown):
 ##
 
 class TimingContext:
-    def __init__(self, fpsnum: int, fpsden: int, field_based: int):
+    def __init__(self,
+        fpsnum: int,
+        fpsden: int,
+        field_based: int,
+        ensure_even_field_count: bool = False,
+    ) -> None:
         assert fpsden > 0 and fpsnum > 0
         self.fps = Fraction(fpsnum, fpsden)
         self.field_based = field_based
+        self.ensure_even_field_count = ensure_even_field_count
 
     def determine_pulldown(self,
         clip_fpsnum: int,
         clip_fpsden: int,
-        override_field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF
+        override_field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF,
     ) -> Pulldown:
         assert clip_fpsnum > 0 and clip_fpsden > 0
         fps = Fraction(clip_fpsnum, clip_fpsden)
 
         ratio = self.fps/fps
-        assert ratio >= 1
+        assert ratio >= 1, "clip FPS cannot exceed container FPS."
         assert ratio.denominator < round(self.fps), "No pattern within one second"
         can_force_progressive = float(ratio).is_integer() and override_field_based == FrameFieldEncoding.P
 
@@ -162,7 +168,7 @@ class TimingContext:
             sequence = self._determine_field_reps(ratio, override_field_based)
         else:
             assert override_field_based == FrameFieldEncoding.P or can_force_progressive
-            sequence = self._determine_for_progressive(ratio)
+            sequence = __class__._determine_for_progressive(ratio)
         return Pulldown(sequence)
 
     def _determine_field_reps(self, ratio: Fraction, field_order: int) -> list[PicStruct]:
@@ -173,17 +179,42 @@ class TimingContext:
         else: #does not matter
             new_ps = PicStruct.PROGRESSIVE_FRAME
         psf = []
-        error_sum = progress = rem = 0
+        error_sum = 0
         for _ in range(ratio.denominator):
             current = round(2*ratio + error_sum)
             error_sum += 2*ratio - current
             new_ps = PicStruct.get_via(current, new_ps.get_last_field())
             psf.append(new_ps)
+        if self.ensure_even_field_count:
+            psf = __class__._adjust_field_pattern(psf)
         return psf
 
-    def _determine_for_progressive(self, ratio: Fraction) -> list[PicStruct]:
+    @staticmethod
+    def _adjust_field_pattern(pattern: list[PicStruct]) -> list[PicStruct]:
+        k = 0
+        while k < len(pattern)-1:
+            if pattern[k] not in [PicStruct.TOP_BOTTOM_TOP, PicStruct.BOTTOM_TOP_BOTTOM]:
+                k += 1
+                continue
+            #We only need to shuffle if the next frame is displayed as progressive
+            if not pattern[k+1].is_progressive():
+                k += 1
+                continue
+            paired_ps = PicStruct(PicStruct.BOTTOM_TOP_BOTTOM + PicStruct.TOP_BOTTOM_TOP - pattern[k])
+            try:
+                pair_idx = pattern[k+1:].index(pattern[k])
+            except ValueError:
+                k += 1
+            else:
+                pair_idx += k + 1
+                pattern[k+1], pattern[pair_idx] = paired_ps, pattern[k+1]
+                k = pair_idx
+        return pattern
+
+    @staticmethod
+    def _determine_for_progressive(ratio: Fraction) -> list[PicStruct]:
         psf = []
-        error_sum = progress = rem = 0
+        error_sum = 0
         for _ in range(ratio.denominator):
             current = round(ratio + error_sum)
             error_sum += ratio - current
@@ -195,7 +226,8 @@ class PicStructFileV1:
         fps_num: int,
         fps_den: int,
         file: Path | str,
-        field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF
+        field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF,
+        ensure_even_field_count: bool = False,
     ) -> None:
         self._fp = Path(file)
         assert self._fp.parent.exists()
@@ -223,7 +255,9 @@ class PicStructFileV1:
             yield (k, fb, pdc.step())
 
     def index(self, clip: vs.VideoNode) -> None:
-        tc = TimingContext(self._fps.numerator, self._fps.denominator, field_based=self.field_based)
+        tc = TimingContext(self._fps.numerator, self._fps.denominator,
+                           field_based=self.field_based,
+                           ensure_even_field_count=self.ensure_even_field_count)
         cfps, cfo = None, None
 
         with open(self._fp, 'w') as f:
