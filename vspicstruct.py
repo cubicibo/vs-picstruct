@@ -29,6 +29,9 @@ from fractions import Fraction
 from enum import IntEnum
 from pathlib import Path
 
+import vapoursynth as vs
+core = vs.core
+
 class PicStruct(IntEnum):
     PROGRESSIVE_FRAME = 0
     TOP               = 1  #PAFF, unsupported by x264
@@ -234,6 +237,7 @@ class PicStructFileV1:
         self._fps = Fraction(fps_num, fps_den)
         assert 0 <= field_based <= 2
         self.field_based = field_based
+        self.ensure_even_field_count = ensure_even_field_count
 
     def _write_header(self, f: TextIO) -> None:
         f.write("# picstruct format v1\n\n")
