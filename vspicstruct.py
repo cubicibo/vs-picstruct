@@ -162,9 +162,12 @@ class TimingContext:
         can_force_progressive = float(ratio).is_integer() and override_field_based == FrameFieldEncoding.P
 
         if self.field_based > 0 and not can_force_progressive:
-            if override_field_based == 0:
-                override_field_based = self.field_based
-            sequence = self._determine_field_reps(ratio, override_field_based)
+            try:
+                sequence = self._determine_field_reps(ratio, self.field_based if 0 == override_field_based else override_field_based)
+            except AssertionError as ae:
+                if override_field_based != FrameFieldEncoding.P:
+                    raise ae
+                sequence = __class__._determine_for_progressive(ratio)
         else:
             assert override_field_based == FrameFieldEncoding.P or can_force_progressive
             sequence = __class__._determine_for_progressive(ratio)
