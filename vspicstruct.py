@@ -61,10 +61,6 @@ class PicStruct(IntEnum):
             return cls(cls.TOP_BOTTOM_TOP)
         elif field_count == 3 and last_field != cls.BOTTOM:
             return cls(cls.BOTTOM_TOP_BOTTOM)
-        elif field_count == 4:
-            return cls(cls.FRAME_DOUBLING)
-        elif field_count == 6:
-            return cls(cls.FRAME_TRIPLING)
         assert 0, f"No PicStruct to repeat {field_count} fields."
         
     @classmethod
