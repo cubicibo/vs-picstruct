@@ -141,17 +141,16 @@ class TimingContext:
         fpsnum: int,
         fpsden: int,
         field_based: int,
-        ensure_even_field_count: bool = False,
     ) -> None:
         assert fpsden > 0 and fpsnum > 0
         self.fps = Fraction(fpsnum, fpsden)
         self.field_based = field_based
-        self.ensure_even_field_count = ensure_even_field_count
 
     def determine_pulldown(self,
         clip_fpsnum: int,
         clip_fpsden: int,
         override_field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF,
+        prefer_progressive: bool = False,
     ) -> Pulldown:
         assert clip_fpsnum > 0 and clip_fpsden > 0
         fps = Fraction(clip_fpsnum, clip_fpsden)
@@ -162,12 +161,21 @@ class TimingContext:
         can_force_progressive = float(ratio).is_integer() and override_field_based == FrameFieldEncoding.P
 
         if self.field_based > 0 and not can_force_progressive:
+            if override_field_based == FrameFieldEncoding.P:
+                try:
+                    #See if we have a progressive sequence
+                    sequence_p = __class__._determine_for_progressive(ratio)
+                except AssertionError:
+                    sequence_p = None
+                else:
+                    if prefer_progressive:
+                        return Pulldown(sequence_p)
             try:
                 sequence = self._determine_field_reps(ratio, self.field_based if 0 == override_field_based else override_field_based)
             except AssertionError as ae:
-                if override_field_based != FrameFieldEncoding.P:
+                if sequence_p is None:
                     raise ae
-                sequence = __class__._determine_for_progressive(ratio)
+                sequence = sequence_p
         else:
             assert override_field_based == FrameFieldEncoding.P or can_force_progressive
             sequence = __class__._determine_for_progressive(ratio)
@@ -187,31 +195,7 @@ class TimingContext:
             error_sum += 2*ratio - current
             new_ps = PicStruct.get_via(current, new_ps.get_last_field())
             psf.append(new_ps)
-        if self.ensure_even_field_count:
-            psf = __class__._adjust_field_pattern(psf)
         return psf
-
-    @staticmethod
-    def _adjust_field_pattern(pattern: list[PicStruct]) -> list[PicStruct]:
-        k = 0
-        while k < len(pattern)-1:
-            if pattern[k] not in [PicStruct.TOP_BOTTOM_TOP, PicStruct.BOTTOM_TOP_BOTTOM]:
-                k += 1
-                continue
-            #We only need to shuffle if the next frame is displayed as progressive
-            if not pattern[k+1].is_progressive():
-                k += 1
-                continue
-            paired_ps = PicStruct(PicStruct.BOTTOM_TOP_BOTTOM + PicStruct.TOP_BOTTOM_TOP - pattern[k])
-            try:
-                pair_idx = pattern[k+1:].index(pattern[k])
-            except ValueError:
-                k += 1
-            else:
-                pair_idx += k + 1
-                pattern[k+1], pattern[pair_idx] = paired_ps, pattern[k+1]
-                k = pair_idx
-        return pattern
 
     @staticmethod
     def _determine_for_progressive(ratio: Fraction) -> list[PicStruct]:
@@ -229,51 +213,49 @@ class PicStructFileV1:
         fps_den: int,
         file: Path | str,
         field_based: FrameFieldEncoding | int = FrameFieldEncoding.TFF,
-        ensure_even_field_count: bool = False,
     ) -> None:
         self._fp = Path(file)
         assert self._fp.parent.exists()
         self._fps = Fraction(fps_num, fps_den)
         assert 0 <= field_based <= 2
         self.field_based = field_based
-        self.ensure_even_field_count = ensure_even_field_count
 
     def _write_header(self, f: TextIO) -> None:
         f.write("# picstruct format v1\n\n")
         f.write("# format: frame_id frame_field_order pic_struct\n")
+
+    @staticmethod
+    def _extract_props(props) -> tuple[int, int, int, int]:
+        fb = props.get('_FieldBased', 0) #if unset, then it is probably progressive
+        tbd = props.get('_DurationNum')
+        tbn = props.get('_DurationDen')
+        prefer_progressive = props.get('FavorProgressive', False)
+        return fb, tbd, tbn, prefer_progressive
 
     def generate(self, clip: vs.VideoNode) -> Generator[tuple[int, int, PicStruct], None, None]:
         tc = TimingContext(self._fps.numerator, self._fps.denominator, field_based=self.field_based)
         cfps, cfo = None, None
 
         for k in range(len(clip)):
-            props = clip.get_frame(k).props
-            fb = props.get('_FieldBased', 0) #if unset, then it is probably progressive
-            tbd = props.get('_DurationNum')
-            tbn = props.get('_DurationDen')
+            fb, tbd, tbn, prefer_progressive = __class__._extract_props(clip.get_frame(k).props)
             if cfps != Fraction(tbn, tbd) or fb != cfo:
-                pdc = tc.determine_pulldown(tbn, tbd, fb)
+                pdc = tc.determine_pulldown(tbn, tbd, fb, prefer_progressive)
                 cfo = fb
                 cfps = Fraction(tbn, tbd)
             yield (k, fb, pdc.step())
 
     def index(self, clip: vs.VideoNode) -> None:
         tc = TimingContext(self._fps.numerator, self._fps.denominator,
-                           field_based=self.field_based,
-                           ensure_even_field_count=self.ensure_even_field_count)
+                           field_based=self.field_based)
         cfps, cfo = None, None
 
         with open(self._fp, 'w') as f:
             self._write_header(f)
             for k in range(len(clip)):
-                props = clip.get_frame(k).props
-                fb = props.get('_FieldBased', 0) #if unset, then it is probably progressive
-                tbd = props.get('_DurationNum')
-                tbn = props.get('_DurationDen')
+                fb, tbd, tbn, prefer_progressive = __class__._extract_props(clip.get_frame(k).props)
                 if cfps != Fraction(tbn, tbd) or fb != cfo:
-                    pdc = tc.determine_pulldown(tbn, tbd, fb)
+                    pdc = tc.determine_pulldown(tbn, tbd, fb, prefer_progressive)
                     cfo = fb
-                    f.write("\n#" + ' '.join(map(lambda x: ''.join(map(lambda y: y[0], x.name.split('_'))), pdc._pattern)) + f", ({tbn}/{tbd}), {FrameFieldEncoding(fb).name}\n")
+                    f.write("\n#" + ' '.join(map(lambda x: ''.join(map(lambda y: y[0], x.name.split('_'))), pdc._pattern)) + f", ({tbn}/{tbd}), {FrameFieldEncoding(fb).name} fp={int(prefer_progressive)}\n")
                     cfps = Fraction(tbn, tbd)
                 f.write(f"{k} {fb} {pdc.step()}\n")
-
