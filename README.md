@@ -50,8 +50,12 @@ Then, you can use the generated `file.txt` with the aforementionned custom x264:
 `x264 [...] --psfile "some/path/file.txt" --fps 30000/1001 [...] -o out.264`<br/>
 
 - You must specify the container framerate to x264 via `--fps`.
-- If your clip contains solely 23.976p and 29.97p, `--fake-interlaced` must be specified.
-- If your clip contains real interlaced footage (temporally disjoint field pairs), you must specify the field order (`--tff` or `--bff`).
+- If your clip has temporally disjoint field pairs, you must specify the field order (`--tff` or `--bff`).
+- You must ensure the GOP duration does not exceed 1 second at any time (for Blu-ray exports)
+    - You can set --keyint to the maximum value (e.g. 30 for 29.97) and override it with a --qpfile that specify I-frames regularly (= new GOP). This is optimal.
+    - You can use a lower --keyint, matching the lowest frame rate in your clip. This is sub-optimal, but absolutely acceptable.
+- `--fake-interlaced` should be specified for progressive-only sequences in interlaced containers.
+
 
 ## Supported combination
 Any sane pulldown is supported. I.e as long as `container_fps/clip_fps` = `repetitions/cycles` is a well-behaved fraction with cycles <= round(framerate).
