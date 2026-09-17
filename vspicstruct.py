@@ -139,10 +139,14 @@ class VideoFieldOrder(IntEnum):
             return PicStruct.BOTTOM
         assert 0, self
 
-class PureInterlacedRateException(Exception): pass
-class IllegalPulldownException(Exception): pass
-class OrphanedFieldException(Exception): pass
-class FieldOrderMismatchException(Exception): pass
+class PureInterlacedRateException(Exception):
+    pass
+class IllegalPulldownException(Exception):
+    pass
+class OrphanedFieldException(Exception):
+    pass
+class FieldOrderMismatchException(Exception):
+    pass
 
 def _sanitize_fps(fps: Fraction | float | str) -> Fraction:
     if isinstance(fps, Fraction):
@@ -208,14 +212,14 @@ class VideoContext:
         # also exclude progressive-only codec configs
         if fps_ratio <= Fraction(3, 2) and self.config.default_field_order != VideoFieldOrder.PROGRESSIVE:
             sequences.append(PulldownType.INTERLACED)
-            
+
         if len(sequences) == 0:
             raise RuntimeError(f"Impossible pulldown (fps ratio={fps_ratio}) too large (<= 3 for progressive, <= 1.5 for interlaced)")
         return sequences
 
     def _select_pulldown(self, video_sequence: VideoSequence, prefer_progressive: bool = False) -> PulldownType:
         possible_pulldown_types = self._determine_all_sequences(video_sequence)
-        
+
         if len(possible_pulldown_types) == 1:
             chosen_pulldown = possible_pulldown_types[0]
         else:
@@ -236,7 +240,7 @@ class VideoContext:
     def find_structures(self, zones: list[PulldownZone]) -> list[list[PicStruct]]:
         # Hard requirement: real interlaced zones enforces specific structures
         filled_zones = [False] * len(zones)
-        
+
         structures_zones = []
         for zk, zone in enumerate(zones):
             assert zone.frames > 0
@@ -257,13 +261,13 @@ class VideoContext:
             if len(structs1) and len(structs2):
                 if structs2[0].get_first_field() != structs1[-1].get_last_field():
                     print(f"Warning: switching field order at frame {frame_cnt} (from zero), this frame must be an IDR.")
-        
+
         global_error_at_edges = [Fraction(0, 1)] * len(zones)
         global_error = Fraction(0, 1)
         last_structure = PicStruct.PROGRESSIVE_FRAME
         orphan_state = [False] * len(zones)
         orphan_field = False
-        
+
         recover_from = -1
         zk = frames = 0
         paired_field = None
@@ -271,7 +275,7 @@ class VideoContext:
             zone = zones[zk]
             if orphan_field and (zone.pulldown_type == PulldownType.PROGRESSIVE):
                 raise OrphanedFieldException(f"Orphaned field from a preceding sequence leaking in another that cannot handle one. {zone}")
-            
+
             if filled_zones[zk]:
                 global_error_at_edges[zk] = global_error
                 orphan_state[zk] = orphan_field
@@ -291,7 +295,7 @@ class VideoContext:
                         bzk -= 1
                     if bzk == zk-1:
                         raise FieldOrderMismatchException(f"Intractable field pairing, cannot place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name}.")
-                    paired_field = self.config.default_field_order.get_last_field().get_paired_field()                    
+                    paired_field = self.config.default_field_order.get_last_field().get_paired_field()
                 else:
                     raise FieldOrderMismatchException(f"Intractable field pairing, cannot place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name}.")
                 recover_from = zk
@@ -315,7 +319,7 @@ class VideoContext:
             paired_field = None
 
             count_in_fields = self.config.codec == VideoCodec.AVC and zone.pulldown_type == PulldownType.INTERLACED
-            fps_ratio = int(1 + count_in_fields)*self.config.fps/zone.sequence.fps   
+            fps_ratio = int(1 + count_in_fields)*self.config.fps/zone.sequence.fps
 
             for fnum in range(zone.frames):
                 duration = round(fps_ratio + global_error)
@@ -327,7 +331,7 @@ class VideoContext:
                     last_zone = zk + 1 == len(zones)
                     orphan_disallowed = last_zone or zones[zk+1].pulldown_type == PulldownType.PROGRESSIVE
                     force_orphan = not last_zone and zones[zk+1].sequence.field_order != VideoFieldOrder.PROGRESSIVE
-                    
+
                     new_duration = duration
                     if force_orphan:
                         last_field = last_structure.get_next_structure(duration, count_in_fields).get_last_field()
@@ -338,14 +342,14 @@ class VideoContext:
                         if orphan_field and duration % 2 == 0:
                             new_duration = 3
                         elif not orphan_field and duration % 2 == 1:
-                            new_duration = 2                            
+                            new_duration = 2
                     if new_duration != duration:
                         print(f"Forcing a structure to have paired fields at a pulldown change: {duration}->{new_duration} at frame: {frames + fnum}.")
                         duration = new_duration
                 global_error += fps_ratio - duration
                 last_structure = last_structure.get_next_structure(duration, count_in_fields)
                 structures_zones[zk].append(last_structure)
-                
+
                 if zone.pulldown_type == PulldownType.INTERLACED and last_structure.get_delta_divisor() % 2 == 1:
                     orphan_field = not orphan_field
             orphan_state[zk] = orphan_field

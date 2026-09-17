@@ -1,44 +1,45 @@
 # VS-PicStruct
-Tool to analyze a VFR clip and produce a list of H.26x "pic struct" instructions to store the VFR clip in a CFR container exploiting soft pulldown.
+Tool to analyze a clip and produce a list of H.26x "pic struct" instructions to store the said clip in a CFR container exploiting soft pulldown.
 
 ## Purpose
+This improves compression efficiency as video sequences no longer have to contain hard-coded duplicates. The output of VS-PicStruct is a series of pulldown instructions to feed to the video encoder and use them to tag the frame, and improve the ratecontrol decisions. As the frames are no longer hard-duplicated, the encoder makes better use of the bidirectional frames and waste less bits.
+
+Typical use-cases:
+- VFR content, both interlaced and progressive.
+- 48 fps ("HFR") movies can be encoded in a 60 fps container.
+- Black & White silent films at 16, 18, 20 or 22 fps can be encoded in a 30 or 60 fps container.
+- PAL content in a NTSC environment.
+
+## Encoders
 Use with this [x264 mod](https://github.com/cubicibo/x264), and more specifically the `--psfile` parameter.
 x265 support is pending approval.
 
 ## Usage
 
 ```python
-from vspicstruct import PicStructFileV1, CodecConfig, VideoFieldOrder, VideoCodec
+from vspicstruct import PicStructFileV1, CodecConfig, VideoCodec
 
 psfile_out = 'some/path/psfile.txt'
 
-#Interlaced pulldown in a 59.94i (29.97 fps) container, H.264 AVC
+#Pulldown in an 29.97 fps interlaced container, TFF (2), H.264 AVC
 container_fps = Fraction(30000, 1001)
-container_default_field_order = VideoFieldOrder.TOP_FIELD_FIRST # (or just 2: same enumeration as VS)
-codec = CodecConfig(Fraction(30000, 1001), VideoFieldOrder.TOP_FIELD_FIRST, VideoCodec.AVC)
+codec = CodecConfig(container_fps, 2, VideoCodec.AVC)
 
 psf = PicStructFileV1(psfile_out)
 
 # E.g. final 29.97 clip is made of five different parts:
 #23.976p
 clip1 = core.std.BlankClip(..., fpsnum=24000, fpsden=1001)
-clip1 = core.std.SetFieldBased(clip1, 0) # optional, by default sections are assumed progressive
+clip1 = core.std.SetFieldBased(clip1, 0) # tag section as progressive (default)
 
 #59.94i TFF
 clip2 = core.std.BlankClip(..., fpsnum=30000, fpsden=1001)
-clip2 = core.std.SetFieldBased(clip2, 2)
+clip2 = core.std.SetFieldBased(clip2, 2) # 2 = TFF, 1 = BFF
 
 #29.97p
 clip3 = core.std.BlankClip(..., fpsnum=30000, fpsden=1001)
 
-#18p
-clip4 = core.std.BlankClip(..., fpsnum=18000, fpsden=1001)
-
-#23.976, and prefer a progressive pull-down sequence over an interlaced one (more jarring to the viewer)
-clip5 = core.std.BlankClip(..., fpsnum=24000, fpsden=1001)
-clip5 = core.std.SetFrameProps(clip5, FavorProgressive=True)
-
-clip = clip1 + clip2 + clip3 + clip4 + clip5
+clip = clip1 + clip2 + clip3
 
 #write psfile from final VFR clip
 psf.write_from_clip(codec, clip)
@@ -59,13 +60,17 @@ Then, you can use the generated `psfile.txt` with the aforementionned custom x26
 - x265 only supports progressive pulldowns. `VideoFieldOrder.PROGRESSIVE` must be set in `CodecConfig`.
 
 ## Mixing interlaced / progressive
-By default VS-PicStruct refuses to mix interlaced and progressive sequences if the `CodecConfig` is configured to TFF/BFF
-to maximize compatibility. This can be changed by forcing `only_interlaced_patterns=False` in `CodecConfig`. This flag is ignored if the codec is configured to progressive-only.
+- By default, with an interlaced container, VS-PicStruct only uses interlaced structures to combine the interlaced & progressive sequences. E.g. 23.976p in 29.97 would produce the sequence "TB, TBT, BT, BTB" (T=Top, B=Bottom).
+- VS-PicStruct only uses progressive picture structures if the field order in  `CodecConfig` is set to progressive.
+- VS-PicStruct can mix interlaced and progressive picture structures with `only_interlaced_patterns=False` in `CodecConfig`. The pulldown generation may be intractable in that configuration: an exception will be raised.
 
-## Supported combination
-Any pulldown is supported. The maximum error from the real framerate is at most half a frame (a field) duration (container timebase).
+## Constraints
+- With interlaced pulldown, the maximum pulldown ratio is 1.5 (e.g 20 fps in 30 fps container)
+- With progressive pulldown, or mixed, the maximum pulldown ratio is 3 (10 fps in 30 fps container)
+- Any pulldown is supported, both 25000/1001 and 25/1 have a valid solutions in a 29.97p container.
+- The maximum error from the original presentation timeline never exceed a field of the container timebase: half the duration of a container frame.
 
-For NTSC, it's recommended to convert first the film content rate (18, 24, 48 fps...) to the closest NTSC framerate. E.g., `18 fps` in a `29.97` progressive container is not ideal, while `18000/1001 fps` only requires a cycle of three structures :
+For NTSC, it's generally better to convert first the film content rate (18, 24, 48 fps...) to the closest NTSC framerate. E.g., `18 fps` in a `29.97` progressive container is not ideal, while `18000/1001 fps` only requires a cycle of three structures:
 `Frame-Doubling -> Progressive Frame -> Frame-Doubling.`
 
 ## Example index
@@ -85,25 +90,11 @@ Here's the output index for the above example:
 
 # (30000/1001), footage=TOP_FIELD_FIRST, pulldown_type=INTERLACED
 20 2 3
+21 2 3
 ...
 
-# (30000/1001), footage=PROGRESSIVE, pulldown_type=PROGRESSIVE
-35 0 0
-...
-
-# (18000/1001), footage=PROGRESSIVE, pulldown_type=PROGRESSIVE
-50 0 0
-51 0 7
-52 0 7
-53 0 0
-...
-
-# (24000/1001), footage=PROGRESSIVE, pulldown_type=PROGRESSIVE
-70 0 7
-71 0 0
-72 0 0
-73 0 0
-74 0 7
+# (30000/1001), footage=PROGRESSIVE, pulldown_type=INTERLACED
+35 0 3
 ...
 ```
 
