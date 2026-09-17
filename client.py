@@ -24,10 +24,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from argparse import ArgumentParser, BooleanOptionalAction
+import re
+
+from argparse import ArgumentParser
 from pathlib import Path
 from fractions import Fraction
-import re
 from vspicstruct import CodecConfig, VideoCodec, VideoFieldOrder, PulldownZone, VideoSequence, PicStructFileV1, VideoContext, PulldownType
 
 def main():
@@ -57,7 +58,7 @@ def main():
     assert args.order in range(0, 3), "Incorrect default frame-field order (expected 0, 1 or 2)."
     args.order = VideoFieldOrder(args.order)
     if args.order > 0 and args.codec == VideoCodec.HEVC:
-        raise RuntimeError("Interlaced with HEVC is not supported.")
+        raise RuntimeError("Interlaced with HEVC is not supported. Specify --order 0 if you haven't.")
 
     args.fps = Fraction(args.fps)
     assert args.fps.numerator > 0
@@ -68,7 +69,7 @@ def main():
 
     with open(args.zonesfile, 'r') as f:
         for line in f.readlines():
-            res = re.match(r"\s?(\d+)\s+(\d+/\d+)\s+(\d)(\s+.)?", line.strip())
+            res = re.match(r"\s*?(\d+)\s+(\d+/\d+)\s+(\d)\s{0,}([a-zA-Z])?", line.strip())
             if res is None:
                 continue
             groups = res.groups()
@@ -80,17 +81,22 @@ def main():
             if groups[3] is None:
                 pulldown_type = vcx.select_pulldown(vidseq, False)
             else:
-                print(groups[3])
-                pulldown_type = PulldownType.PROGRESSIVE if groups[3].strip() == 'p' else PulldownType.INTERLACED
+                pld_type = groups[3].strip().lower()
+                assert pld_type in ('i', 'p'), "unknown pulldown type (expected i or p, got '{}')"
+                pulldown_type = PulldownType.PROGRESSIVE if pld_type == 'p' else PulldownType.INTERLACED
             pdz = PulldownZone(vidseq, pulldown_type, num_frames)
             zones.append(pdz)
     ####
-    print("======== ZONES ======== ")
-
-    for zk, zone in enumerate(zones):
-        print(f"zone {zk}: {zone.frames:5}, {zone.sequence.fps}, {zone.sequence.field_order.name}, type={zone.pulldown_type.name[0].lower()}")
     if len(zones) == 0:
-        raise RuntimeError("No correct zone identified, giving up.")
+        raise RuntimeError("No valid zone identified in input file, giving up.")
+
+    print("======== ZONES ======== ")
+    print("Zones      Frames ranges    FPS     PictType  PldType")
+    frames = 0
+    for zk, zone in enumerate(zones):
+        field_order_acronym = ''.join(x[0] for x in zone.sequence.field_order.name.split('_'))
+        print(f"zone {zk:3}: {frames:7}->{(frames+zone.frames-1):7}, {zone.sequence.fps}, {field_order_acronym:3}  :  {zone.pulldown_type.name[0].lower()}")
+        frames += zone.frames
 
     print("========= LOG ========= ")
     structs = vcx.find_structures(zones)

@@ -24,12 +24,26 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import TextIO
+from typing import Any, Protocol, TextIO, TypeAlias
+from collections.abc import Sized
+
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
+
+try:
+    import vapoursynth as vs
+    VsClip: TypeAlias = vs.VideoNode
+    VsFrame: TypeAlias = vs.VideoFrame
+except (ModuleNotFoundError, ImportError):
+    class VsFrame(Protocol):
+        props: dict[str, Any]
+    class VsClip(Sized, Protocol):
+        frames: list[VsFrame]
+        def get_frame(self, k: int) -> VsFrame:
+            ...
 
 #%%
 class VideoCodec(IntEnum):
@@ -147,6 +161,8 @@ class OrphanedFieldException(Exception):
     pass
 class FieldOrderMismatchException(Exception):
     pass
+class ExcessiveFramerateException(Exception):
+    pass
 
 def _sanitize_fps(fps: Fraction | float | str) -> Fraction:
     if isinstance(fps, Fraction):
@@ -200,6 +216,9 @@ class VideoContext:
         self.config = config
 
     def _determine_all_sequences(self, video_sequence: VideoSequence) -> list[PulldownType]:
+        """
+        Determine allowed possible pulldown types given the sequence parameters
+        """
         fps_ratio = self.config.fps / video_sequence.fps
 
         sequences = []
@@ -218,6 +237,11 @@ class VideoContext:
         return sequences
 
     def select_pulldown(self, video_sequence: VideoSequence, prefer_progressive: bool = False) -> PulldownType:
+        """
+        Select a pulldown type given the identified possible sequences and codec config.
+        """
+        if video_sequence.fps > self.config.fps:
+            raise ExcessiveFramerateException(f"Framerate exceed the rate of the container: {video_sequence.fps} > {self.config.fps}.")
         if video_sequence.fps != self.config.fps and video_sequence.field_order != 0:
             raise PureInterlacedRateException(f"FPS of TFF/BFF section cannot differ from its container, got fps={video_sequence.fps}.")
 
@@ -232,7 +256,10 @@ class VideoContext:
         return chosen_pulldown
 
     @staticmethod
-    def _extract_props(frame: 'vs.VideoFrame') -> tuple[VideoSequence, bool]:
+    def _extract_props(frame: VsFrame) -> tuple[VideoSequence, bool]:
+        """
+        Extract frame properties to determine sequences edges
+        """
         props = frame.props
         fb = VideoFieldOrder(props.get('_FieldBased', 0)) #if unset, then it is progressive
         tbd = props.get('_DurationNum')
@@ -241,6 +268,10 @@ class VideoContext:
         return vidseq_config, props.get('FavorProgressive', False)
 
     def find_structures(self, zones: list[PulldownZone]) -> list[list[PicStruct]]:
+        """
+        Find the structures of every frame, for every zone and ensures strict
+        field matching at boundaries.
+        """
         # Hard requirement: real interlaced zones enforces specific structures
         filled_zones = [False] * len(zones)
 
@@ -365,11 +396,11 @@ class VideoContext:
         assert sum(len(s) for s in structures_zones) == sum(z.frames for z in zones)
         return structures_zones
 
-    def find_zones_from_clip(self, clip: 'vs.VideoNode') -> list[PulldownZone]:
+    def find_zones_from_clip(self, clip: VsClip) -> list[PulldownZone]:
         zones: list[PulldownZone] = []
         current_ctx = PulldownZone(None, None)
 
-        for k in range(len(clip)):
+        for k in range(len(clip.frames)):
             new_sequence, prefer_progressive = self.__class__._extract_props(clip.get_frame(k))
             if current_ctx.sequence != new_sequence or (prefer_progressive is True and current_ctx.pulldown_type == PulldownType.INTERLACED):
                 seq_type = self.select_pulldown(new_sequence, prefer_progressive)
@@ -405,10 +436,12 @@ class PicStructFileV1:
                     frame_cnt += 1
             f.write("\n")
 
-    def write_from_clip(self, codec: CodecConfig, clip: 'vs.VideoNode') -> None:
+    def write_from_clip(self, codec: CodecConfig, clip: VsClip) -> None:
+        """
+        Generates the psfile from a vapoursynth or a mock clip object
+        """
         vctx = VideoContext(codec)
-
         zones = vctx.find_zones_from_clip(clip)
         structures = vctx.find_structures(zones)
-
         self.write(structures, zones)
+####
