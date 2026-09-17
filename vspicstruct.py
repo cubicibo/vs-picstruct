@@ -217,7 +217,10 @@ class VideoContext:
             raise RuntimeError(f"Impossible pulldown (fps ratio={fps_ratio}) too large (<= 3 for progressive, <= 1.5 for interlaced)")
         return sequences
 
-    def _select_pulldown(self, video_sequence: VideoSequence, prefer_progressive: bool = False) -> PulldownType:
+    def select_pulldown(self, video_sequence: VideoSequence, prefer_progressive: bool = False) -> PulldownType:
+        if video_sequence.fps != self.config.fps and video_sequence.field_order != 0:
+            raise PureInterlacedRateException(f"FPS of TFF/BFF section cannot differ from its container, got fps={video_sequence.fps}.")
+
         possible_pulldown_types = self._determine_all_sequences(video_sequence)
 
         if len(possible_pulldown_types) == 1:
@@ -256,7 +259,7 @@ class VideoContext:
 
         # Check for contiguous field order swaps
         frame_cnt = 0
-        for (zone1, structs1), (_, structs2) in pairwise(zip(zones, structures)):
+        for (zone1, structs1), (_, structs2) in pairwise(zip(zones, structures_zones)):
             frame_cnt += zone1.frames
             if len(structs1) and len(structs2):
                 if structs2[0].get_first_field() != structs1[-1].get_last_field():
@@ -274,7 +277,7 @@ class VideoContext:
         while zk < len(zones):
             zone = zones[zk]
             if orphan_field and (zone.pulldown_type == PulldownType.PROGRESSIVE):
-                raise OrphanedFieldException(f"Orphaned field from a preceding sequence leaking in another that cannot handle one. {zone}")
+                raise OrphanedFieldException(f"Orphaned field from a preceding sequence leaking in another that cannot handle one. {zk}, {zone}")
 
             if filled_zones[zk]:
                 global_error_at_edges[zk] = global_error
@@ -294,10 +297,10 @@ class VideoContext:
                         filled_zones[bzk] = False
                         bzk -= 1
                     if bzk == zk-1:
-                        raise FieldOrderMismatchException(f"Intractable field pairing, cannot place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name}.")
+                        raise FieldOrderMismatchException(f"Intractable field pairing, cannot place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name} at zone {zk}.")
                     paired_field = self.config.default_field_order.get_last_field().get_paired_field()
                 else:
-                    raise FieldOrderMismatchException(f"Intractable field pairing, cannot place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name}.")
+                    raise FieldOrderMismatchException(f"Intractable field pairing, did not manage to place a {edge_field.get_paired_field().name} field for a mandatory {edge_field.name} at zone {zk}.")
                 recover_from = zk
                 zk = max(bzk, 0)
 
@@ -307,7 +310,7 @@ class VideoContext:
                 prev_frame = frames
                 frames = sum(x.frames for x in zones[:zk])
                 last_structure = PicStruct.PROGRESSIVE_FRAME # erased in filled_zones[zk]
-                print(f"Failed to converge: swapping fields and starting from last safe anchor (reverting from frame {prev_frame} to {frames}).")
+                print(f"Failed to converge at zone {zk}: swapping fields and starting from last safe anchor (reverting from frame {prev_frame} to {frames}).")
                 continue
 
             structures_zones[zk].clear()
@@ -337,14 +340,14 @@ class VideoContext:
                         last_field = last_structure.get_next_structure(duration, count_in_fields).get_last_field()
                         next_first = structures_zones[zk+1][0].get_first_field()
                         if last_field == next_first:
-                            duration = 2 if duration == 3 else 3
+                            new_duration = 2 if duration == 3 else 3
                     elif orphan_disallowed:
                         if orphan_field and duration % 2 == 0:
                             new_duration = 3
                         elif not orphan_field and duration % 2 == 1:
                             new_duration = 2
                     if new_duration != duration:
-                        print(f"Forcing a structure to have paired fields at a pulldown change: {duration}->{new_duration} at frame: {frames + fnum}.")
+                        print(f"Forcing a structure to have paired fields at a pulldown change: {duration}->{new_duration} at frame: {frames + fnum} at zone {zk}.")
                         duration = new_duration
                 global_error += fps_ratio - duration
                 last_structure = last_structure.get_next_structure(duration, count_in_fields)
@@ -369,9 +372,7 @@ class VideoContext:
         for k in range(len(clip)):
             new_sequence, prefer_progressive = self.__class__._extract_props(clip.get_frame(k))
             if current_ctx.sequence != new_sequence or (prefer_progressive is True and current_ctx.pulldown_type == PulldownType.INTERLACED):
-                if new_sequence.fps != self.config.fps and new_sequence.field_order != 0:
-                    raise PureInterlacedRateException(f"FPS of TFF/BFF section cannot differ from its container, got fps={new_sequence.video_sequence.fps}.")
-                seq_type = self._select_pulldown(new_sequence, prefer_progressive)
+                seq_type = self.select_pulldown(new_sequence, prefer_progressive)
 
                 current_ctx = PulldownZone(new_sequence, seq_type)
                 zones.append(current_ctx)
@@ -403,11 +404,11 @@ class PicStructFileV1:
                     f.write(f"\n{frame_cnt} {int(zone.sequence.field_order)} {int(ps)}")
                     frame_cnt += 1
             f.write("\n")
-            
+
     def write_from_clip(self, codec: CodecConfig, clip: 'vs.VideoNode') -> None:
         vctx = VideoContext(codec)
-        
+
         zones = vctx.find_zones_from_clip(clip)
         structures = vctx.find_structures(zones)
-        
+
         self.write(structures, zones)

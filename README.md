@@ -16,6 +16,29 @@ x265 support is pending approval.
 
 ## Usage
 
+### CLI
+`python3 client.py [PARAMETERS] outputfile`
+
+```
+ -i, --zonesfile     Input zones file [mandatory]
+ -f, --fps           Container framerate. Must be given as a fraction N/D. E.g. 30000/1001
+ -o, --order         Default field order of the container (0: Progressive, 1: BFF, 2: TFF)
+ -c, --codec         Target video codec ('AVC' or 'HEVC')
+ -m, --mixed         Flag to allow mixing progressive and interlaced markings
+                       ! Do not set this flag you do not understand this !
+```
+
+The zonesfile contains a pulldown zone per line. Each zone specify a count of frames, a framerate and a field order (if it should be encoded as a progressive or interlaced picture). The format is the following:<br/>
+`number_of_frames fps_num/fps_den field_order`<br/>
+E.g.:
+```
+210 24000/1001 0
+115 30000/1001 2
+89 30000/1001 0
+```
+
+### VapourSynth / Scripting
+
 ```python
 from vspicstruct import PicStructFileV1, CodecConfig, VideoCodec
 
@@ -89,12 +112,12 @@ Here's the output index for the above example:
 ...
 
 # (30000/1001), footage=TOP_FIELD_FIRST, pulldown_type=INTERLACED
-20 2 3
-21 2 3
+210 2 3
+211 2 3
 ...
 
 # (30000/1001), footage=PROGRESSIVE, pulldown_type=INTERLACED
-35 0 3
+315 0 3
 ...
 ```
 
