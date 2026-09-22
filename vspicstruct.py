@@ -56,8 +56,8 @@ class PulldownType(IntFlag):
 
 class PicStruct(IntEnum):
     PROGRESSIVE_FRAME = 0
-    TOP               = 1 # PAFF-only, not supported
-    BOTTOM            = 2 # PAFF-only, not supported
+    TOP               = 1 # PAFF-only, not suited for pulldown
+    BOTTOM            = 2 # PAFF-only, not suited for pulldown
     TOP_BOTTOM        = 3
     BOTTOM_TOP        = 4
     TOP_BOTTOM_TOP    = 5
@@ -117,7 +117,7 @@ class PicStruct(IntEnum):
         # (cls.TOP, cls.BOTTOM_TOP, cls.TOP_BOTTOM_TOP, cls.TOP_PREVBOTTOM, cls.TOP_NEXTBOTTOM)
         return cls.TOP
 
-    def get_next_structure(self, delta_divisor: int, count_in_fields: bool = True) -> 'PicStruct':
+    def get_next_structure(self, delta_divisor: int) -> 'PicStruct':
         """
         Returns the next structure given its duration and the last field in display.
 
@@ -128,7 +128,6 @@ class PicStruct(IntEnum):
         candidates = ()
         match self.get_last_field():
             case cls.PROGRESSIVE_FRAME:
-                delta_divisor >>= (count_in_fields & 1)
                 candidates = (cls.PROGRESSIVE_FRAME, cls.FRAME_DOUBLING, cls.FRAME_TRIPLING)
             case cls.TOP:
                 candidates = (cls.BOTTOM, cls.BOTTOM_TOP, cls.BOTTOM_TOP_BOTTOM) #PREV/NEXT pairing is up to the caller.
@@ -358,6 +357,8 @@ class VideoContext:
             for fnum in range(zone.frames):
                 duration = round(fps_ratio + global_error)
                 duration = max(1, min(3, duration))
+                if count_in_fields and duration == 1:
+                    duration = 2
 
                 if fnum+1 == zone.frames and zone.pulldown_type == PulldownType.INTERLACED:
                     # Pure interlaced sequence can live with a delta poc, but then we could have
@@ -368,7 +369,7 @@ class VideoContext:
 
                     new_duration = duration
                     if force_orphan:
-                        last_field = last_structure.get_next_structure(duration, count_in_fields).get_last_field()
+                        last_field = last_structure.get_next_structure(duration).get_last_field()
                         next_first = structures_zones[zk+1][0].get_first_field()
                         if last_field == next_first:
                             new_duration = 2 if duration == 3 else 3
@@ -381,7 +382,7 @@ class VideoContext:
                         print(f"Forcing a structure to have paired fields at a pulldown change: {duration}->{new_duration} at frame: {frames + fnum} at zone {zk}.")
                         duration = new_duration
                 global_error += fps_ratio - duration
-                last_structure = last_structure.get_next_structure(duration, count_in_fields)
+                last_structure = last_structure.get_next_structure(duration)
                 structures_zones[zk].append(last_structure)
 
                 if zone.pulldown_type == PulldownType.INTERLACED and last_structure.get_delta_divisor() % 2 == 1:
