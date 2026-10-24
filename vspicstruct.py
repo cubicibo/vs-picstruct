@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 MIT License
 
@@ -430,7 +428,7 @@ class PicStructFileV1:
             frame_cnt = 0
             for zone, struct_zone in zip(zones, structures_zones):
                 assert zone.frames == len(struct_zone)
-                f.write(f"\n# ({zone.sequence.fps}), footage={zone.sequence.field_order.name}, pulldown_type={zone.pulldown_type.name}")
+                f.write(f"\n# ({zone.sequence.fps}), num_frames={len(struct_zone)}, footage={zone.sequence.field_order.name}, pulldown_type={zone.pulldown_type.name}")
                 for ps in struct_zone:
                     assert not ps.is_paff(), "PAFF structure cannot be used in a pulldown."
                     f.write(f"\n{frame_cnt} {int(zone.sequence.field_order)} {int(ps)}")

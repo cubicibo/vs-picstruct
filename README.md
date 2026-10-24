@@ -1,18 +1,19 @@
 # VS-PicStruct
-Tool to analyze a clip and produce a list of H.26x "pic struct" instructions to store the said clip in a CFR container exploiting soft pulldown.
+Tool to analyze a VFR clip and produce a list of H.26x "pic struct" instructions to store the said clip in a CFR container exploiting soft pulldown.
 
 ## Purpose
-This improves compression efficiency as video sequences no longer have to contain hard-coded duplicates. The output of VS-PicStruct is a series of pulldown instructions to feed to the video encoder and use them to tag the frame, and improve the ratecontrol decisions. As the frames are no longer hard-duplicated, the encoder makes better use of the bidirectional frames and waste less bits.
+The output of VS-PicStruct is a series of pulldown instructions to feed to the video encoder. This improves compression efficiency as video sequences no longer have to contain hard-coded duplicate frames or fields. The encoder can make better use of bidirectional frames and bit budgeting decisions.
+
+This tool is meant for professional (Ultra HD) Blu-ray authoring and broadcasting, where the AVC/HEVC streams must use specific constant framerates that may not be suited for the input footage.
 
 Typical use-cases:
-- VFR content, both interlaced and progressive.
-- 48 fps ("HFR") movies can be encoded in a 60 fps container.
-- Black & White silent films at 16, 18, 20 or 22 fps can be encoded in a 30 or 60 fps container.
-- PAL content in a NTSC environment.
+- VFR content, and/or with mixed scan type (interlaced and progressive sections)
+- HFR (48 fps) features, encodable within a 60 fps container.
+- Black & White silent films at 16, 18, 20 or 22 fps to store within a 30 or 60 fps container.
+- PAL content in a NTSC container.
 
 ## Encoders
-Use with this [x264 mod](https://github.com/cubicibo/x264), and more specifically the `--psfile` parameter.
-x265 support is pending approval.
+Use with this [x264 mod](https://github.com/cubicibo/x264) or x265 trunk. More specifically the `--psfile` parameter.
 
 ## Usage
 
@@ -24,8 +25,6 @@ x265 support is pending approval.
  -f, --fps           Container framerate. Must be given as a fraction N/D. E.g. 30000/1001
  -o, --order         Default field order of the container (0: Progressive, 1: BFF, 2: TFF)
  -c, --codec         Target video codec ('AVC' or 'HEVC')
- -m, --mixed         Flag to allow mixing progressive and interlaced markings
-                       ! Do not set this flag you do not understand this !
 ```
 
 The zonesfile contains a pulldown zone per line. Each zone specify a count of frames, a framerate and a field order (if it should be encoded as a progressive or interlaced picture). The format is the following:<br/>
@@ -36,6 +35,8 @@ E.g.:
 115 30000/1001 2
 89 30000/1001 0
 ```
+
+`python3 client.py -i ./zones.txt -f 30000/1001 --codec AVC --order 2 ./psfile.txt`
 
 ### VapourSynth / Scripting
 
@@ -77,15 +78,15 @@ Then, you can use the generated `psfile.txt` with the aforementionned custom x26
 - You must specify the container framerate via `--fps`.
 - If your clip has temporally disjoint field pairs in some section, you must specify the field order (`--tff` or `--bff`) in the command.
 - For BD exports, you must ensure the GOP duration does not exceed 1 second at any time. In these custom x26* builds, the `--keyint` unit is defined with respect to the container rate.
-    - For one second GOP `--keyint` must equal the integer framerate of the container (e.g. 30 for 29.97 fps)
-    - In other words, `--keyint` is no longer defined as a frame count but by the number of container refreshes. E.g. if you use `--pulldown 32` on a 23.976 input, then `--keyint` would no longer be 24, but 30!
+    - For one second GOPs, `--keyint` must be equal to the integer framerate of the container (e.g. 30 for 29.97 fps)
+    - In other words, `--keyint` is no longer defined as a frame count but by the number of container refreshes. E.g. if you use `--pulldown 32` on a 23.976 input, then `--keyint` would no longer be 24, but 30.
 - `--fake-interlaced` should be specified for progressive-only sequences in interlaced containers.
 - x265 only supports progressive pulldowns. `VideoFieldOrder.PROGRESSIVE` must be set in `CodecConfig`.
 
 ## Mixing interlaced / progressive
 - By default, with an interlaced container, VS-PicStruct only uses interlaced structures to combine the interlaced & progressive sequences. E.g. 23.976p in 29.97 would produce the sequence "TB, TBT, BT, BTB" (T=Top, B=Bottom).
 - VS-PicStruct only uses progressive picture structures if the field order in  `CodecConfig` is set to progressive.
-- VS-PicStruct can mix interlaced and progressive picture structures with `only_interlaced_patterns=False` in `CodecConfig`. The pulldown generation may be intractable in that configuration: an exception will be raised.
+- VS-PicStruct can mix interlaced and progressive picture structures by setting `only_interlaced_patterns=False` in `CodecConfig` (or using the `--mixed` flag (`-m`) on the CLI). The pulldown may be intractable in that configuration: an exception will be raised.
 
 ## Constraints
 - With interlaced pulldown, the maximum pulldown ratio is 1.5 (e.g 20 fps in 30 fps container)
